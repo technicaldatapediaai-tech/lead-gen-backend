@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     # Environment
     DEV_MODE: bool = True  # Set to False in production
-    FRONTEND_URL: str = "http://localhost:3000"  # Your Next.js frontend URL
+    FRONTEND_URL: str = "https://lead-gen-frontend-orcin.vercel.app"  # Your production frontend URL
     
     # Database
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/lead_genius"
