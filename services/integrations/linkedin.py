@@ -22,7 +22,7 @@ class LinkedInConfig(BaseModel):
     """LinkedIn API configuration."""
     client_id: str = ""
     client_secret: str = ""
-    redirect_uri: str = "http://localhost:8000/api/linkedin/callback"
+    redirect_uri: str = "https://lead-gen-backend-dcxf.onrender.com/api/linkedin/callback"
     scopes: list = ["openid", "profile", "w_member_social", "email"]
     
     # Sales Navigator specific

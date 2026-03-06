@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     
     # API Settings
     API_PREFIX: str = "/api"
-    BACKEND_URL: str = "http://localhost:8000"
+    BACKEND_URL: str = "https://lead-gen-backend-dcxf.onrender.com"
     
     # LinkedIn API Settings (configure in .env for LinkedIn integration)
     LINKEDIN_CLIENT_ID: str = ""

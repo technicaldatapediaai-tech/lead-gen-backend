@@ -238,7 +238,7 @@ async def get_oauth_url(
     Args:
         credential_type: 'personal' or 'organization'
     """
-    redirect_uri = f"{getattr(settings, 'BACKEND_URL', 'http://localhost:8000')}/api/linkedin/callback"
+    redirect_uri = f"{getattr(settings, 'BACKEND_URL', 'https://lead-gen-backend-dcxf.onrender.com')}/api/linkedin/callback"
     print(f"🔗 LinkedIn OAuth initiated with redirect_uri: {redirect_uri}")
     
     config = LinkedInConfig(
@@ -303,7 +303,7 @@ async def oauth_callback(
     config = LinkedInConfig(
         client_id=getattr(settings, 'LINKEDIN_CLIENT_ID', ''),
         client_secret=getattr(settings, 'LINKEDIN_CLIENT_SECRET', ''),
-        redirect_uri=f"{getattr(settings, 'BACKEND_URL', 'http://localhost:8000')}/api/linkedin/callback"
+        redirect_uri=f"{getattr(settings, 'BACKEND_URL', 'https://lead-gen-backend-dcxf.onrender.com')}/api/linkedin/callback"
     )
     
     client = LinkedInAPIClient()
