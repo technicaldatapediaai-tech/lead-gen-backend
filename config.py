@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     # Environment
     DEV_MODE: bool = True  # Set to False in production
-    FRONTEND_URL: str = "https://lead-gen-frontend-orcin.vercel.app"  # Your production frontend URL
+    FRONTEND_URL: str = "http://localhost:3000"  # Your Next.js frontend URL
     
     # Database
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/lead_genius"
@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     
     # API Settings
     API_PREFIX: str = "/api"
-    BACKEND_URL: str = "https://lead-gen-backend-dcxf.onrender.com"
+    BACKEND_URL: str = "http://localhost:8000"
     
     # LinkedIn API Settings (configure in .env for LinkedIn integration)
     LINKEDIN_CLIENT_ID: str = ""
