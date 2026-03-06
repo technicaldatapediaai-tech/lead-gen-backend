@@ -138,6 +138,16 @@ class AuthService:
         if not user.is_active:
             raise_unauthorized("User account is deactivated")
         
+        # Auto-select organization if user has memberships but no current org
+        if not user.current_org_id:
+            from backend.repositories.user_repo import OrganizationMemberRepository
+            member_repo = OrganizationMemberRepository(self.session)
+            memberships = await member_repo.get_user_memberships(user.id)
+            if memberships:
+                first_org_id = memberships[0].org_id
+                await self.user_repo.switch_org(user.id, first_org_id)
+                user.current_org_id = first_org_id
+        
         # Create tokens
         token_data = {
             "sub": user.email,

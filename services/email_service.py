@@ -8,6 +8,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Optional
 from abc import ABC, abstractmethod
+from datetime import datetime
 
 from backend.config import settings
 
@@ -21,7 +22,9 @@ class EmailService(ABC):
         to: str, 
         subject: str, 
         body: str, 
-        html: Optional[str] = None
+        html: Optional[str] = None,
+        from_email: Optional[str] = None,
+        smtp_config: Optional[dict] = None
     ) -> bool:
         """Send an email."""
         pass
@@ -31,38 +34,8 @@ class EmailService(ABC):
         verify_link = f"{base_url}/verify-email?token={token}"
         
         subject = "Verify your Lead Genius account"
-        body = f"""
-Hello,
-
-Please verify your email by clicking the link below:
-
-{verify_link}
-
-This link expires in 24 hours.
-
-If you didn't create an account, please ignore this email.
-
-Best regards,
-Lead Genius Team
-        """
-        
-        html = f"""
-        <html>
-        <body>
-            <h2>Welcome to Lead Genius!</h2>
-            <p>Please verify your email by clicking the button below:</p>
-            <p>
-                <a href="{verify_link}" 
-                   style="background-color: #4CAF50; color: white; padding: 14px 25px; 
-                          text-decoration: none; display: inline-block; border-radius: 4px;">
-                    Verify Email
-                </a>
-            </p>
-            <p>Or copy this link: {verify_link}</p>
-            <p><small>This link expires in 24 hours.</small></p>
-        </body>
-        </html>
-        """
+        body = f"Please verify your email: {verify_link}"
+        html = f"<h2>Welcome!</h2><p><a href='{verify_link}'>Verify Email</a></p>"
         
         return await self.send_email(to, subject, body, html)
     
@@ -70,39 +43,9 @@ Lead Genius Team
         """Send password reset email."""
         reset_link = f"{base_url}/reset-password?token={token}"
         
-        subject = "Reset your Lead Genius password"
-        body = f"""
-Hello,
-
-You requested to reset your password. Click the link below:
-
-{reset_link}
-
-This link expires in 1 hour.
-
-If you didn't request this, please ignore this email.
-
-Best regards,
-Lead Genius Team
-        """
-        
-        html = f"""
-        <html>
-        <body>
-            <h2>Password Reset Request</h2>
-            <p>Click the button below to reset your password:</p>
-            <p>
-                <a href="{reset_link}" 
-                   style="background-color: #2196F3; color: white; padding: 14px 25px; 
-                          text-decoration: none; display: inline-block; border-radius: 4px;">
-                    Reset Password
-                </a>
-            </p>
-            <p>Or copy this link: {reset_link}</p>
-            <p><small>This link expires in 1 hour.</small></p>
-        </body>
-        </html>
-        """
+        subject = "Reset your password"
+        body = f"Reset your password: {reset_link}"
+        html = f"<h2>Password Reset</h2><p><a href='{reset_link}'>Reset Password</a></p>"
         
         return await self.send_email(to, subject, body, html)
 
@@ -113,7 +56,6 @@ class MockEmailService(EmailService):
     Prints emails to console instead of sending.
     """
     
-    # Store sent emails for testing/debugging
     sent_emails: list = []
     
     async def send_email(
@@ -121,110 +63,91 @@ class MockEmailService(EmailService):
         to: str, 
         subject: str, 
         body: str, 
-        html: Optional[str] = None
+        html: Optional[str] = None,
+        from_email: Optional[str] = None,
+        smtp_config: Optional[dict] = None
     ) -> bool:
-        """Mock send - prints to console and stores for debugging."""
-        email_data = {
-            "to": to,
-            "subject": subject,
-            "body": body
-        }
-        self.sent_emails.append(email_data)
-        
-        print("\n" + "=" * 60)
-        print("📧 MOCK EMAIL (Development Mode)")
-        print("=" * 60)
-        print(f"To: {to}")
+        """Mock send - prints to console."""
+        print(f"\n📧 MOCK EMAIL to {to} (from {from_email or 'system'})")
         print(f"Subject: {subject}")
-        print("-" * 60)
-        print(body)
-        print("=" * 60 + "\n")
-        
+        if smtp_config:
+            print(f"Using SMTP: {smtp_config.get('host')}")
+        print("-" * 20)
+        print(body[:200] + "..." if len(body) > 200 else body)
+        print("-" * 20 + "\n")
         return True
-    
-    def get_last_email(self) -> Optional[dict]:
-        """Get the last sent email (for testing)."""
-        return self.sent_emails[-1] if self.sent_emails else None
 
 
 class SMTPEmailService(EmailService):
     """
     SMTP email service for production.
-    Configure with environment variables:
-    - SMTP_HOST
-    - SMTP_PORT
-    - SMTP_USER
-    - SMTP_PASSWORD
-    - EMAIL_FROM
     """
     
     def __init__(self):
-        self.host = getattr(settings, 'SMTP_HOST', 'smtp.gmail.com')
-        self.port = getattr(settings, 'SMTP_PORT', 587)
-        self.user = getattr(settings, 'SMTP_USER', '')
-        self.password = getattr(settings, 'SMTP_PASSWORD', '')
-        self.from_email = getattr(settings, 'EMAIL_FROM', 'noreply@leadgenius.com')
+        self.default_host = getattr(settings, 'SMTP_HOST', 'smtp.gmail.com')
+        self.default_port = getattr(settings, 'SMTP_PORT', 587)
+        self.default_user = getattr(settings, 'SMTP_USER', '')
+        self.default_password = getattr(settings, 'SMTP_PASSWORD', '')
+        self.default_from = getattr(settings, 'EMAIL_FROM', 'noreply@leadgenius.com')
     
     async def send_email(
         self, 
         to: str, 
         subject: str, 
         body: str, 
-        html: Optional[str] = None
+        html: Optional[str] = None,
+        from_email: Optional[str] = None,
+        smtp_config: Optional[dict] = None
     ) -> bool:
         """Send email via SMTP."""
         try:
+            # Determine config to use
+            host = (smtp_config.get('host') if smtp_config and smtp_config.get('host') else self.default_host)
+            port = (smtp_config.get('port') if smtp_config and smtp_config.get('port') else self.default_port)
+            user = (smtp_config.get('user') if smtp_config and smtp_config.get('user') else self.default_user)
+            password = (smtp_config.get('password') if smtp_config and smtp_config.get('password') else self.default_password)
+            from_addr = from_email or self.default_from
+            
             msg = MIMEMultipart('alternative')
             msg['Subject'] = subject
-            msg['From'] = self.from_email
+            msg['From'] = from_addr
             msg['To'] = to
             
-            # Add plain text
             part1 = MIMEText(body, 'plain')
             msg.attach(part1)
             
-            # Add HTML if provided
             if html:
                 part2 = MIMEText(html, 'html')
                 msg.attach(part2)
             
             # Send
-            with smtplib.SMTP(self.host, self.port) as server:
+            with smtplib.SMTP(host, port) as server:
                 server.starttls()
-                if self.user and self.password:
-                    server.login(self.user, self.password)
-                server.sendmail(self.from_email, to, msg.as_string())
+                if user and password:
+                    server.login(user, password)
+                server.sendmail(from_addr, to, msg.as_string())
             
-            print(f"✅ Email sent to {to}: {subject}")
             return True
-            
         except Exception as e:
-            print(f"❌ Failed to send email to {to}: {e}")
+            error_msg = f"❌ Failed to send email to {to}: {str(e)}"
+            print(error_msg)
+            # Log to a file we can easily check
+            with open("email_errors.log", "a") as f:
+                f.write(f"{datetime.utcnow()} - {error_msg}\n")
             return False
 
 
-# =============================================================================
-# EMAIL SERVICE SINGLETON
-# =============================================================================
-
 _email_service: Optional[EmailService] = None
-
 
 def get_email_service() -> EmailService:
     """Get the email service instance."""
     global _email_service
-    
     if _email_service is None:
-        # Check if we have SMTP configured
         smtp_host = getattr(settings, 'SMTP_HOST', None)
-        
-        if smtp_host:
-            print("📧 Using SMTP Email Service")
+        if smtp_host or os.getenv('SMTP_HOST'):
             _email_service = SMTPEmailService()
         else:
-            print("📧 Using Mock Email Service (emails printed to console)")
             _email_service = MockEmailService()
-    
     return _email_service
 
 

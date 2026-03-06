@@ -58,6 +58,9 @@ class OutreachMessage(SQLModel, table=True):
     # Send method - how the message will be/was sent
     send_method: str = Field(default="manual", index=True)  # manual, extension, api
     
+    # Message type - what kind of LinkedIn outreach
+    message_type: str = Field(default="inmail")  # inmail, connection
+    
     # Status
     status: str = Field(default="pending", index=True)  
     # pending, queued, sending, sent, delivered, opened, replied, failed
@@ -73,14 +76,19 @@ class OutreachMessage(SQLModel, table=True):
     opened_at: Optional[datetime] = None
     replied_at: Optional[datetime] = None
     
+    # Timestamps
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    
     # Error tracking
     error_message: Optional[str] = None
     retry_count: int = Field(default=0)
     
     # Extension tracking
     extension_session_id: Optional[str] = None  # Track which extension session
-    
-    # Timestamps
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    # Who created/scheduled this message
+    user_id: Optional[uuid.UUID] = Field(default=None, foreign_key="user.id", index=True)
+
+    # Save Everything Strategy
 

@@ -23,7 +23,7 @@ class LinkedInConfig(BaseModel):
     client_id: str = ""
     client_secret: str = ""
     redirect_uri: str = "http://localhost:8000/api/linkedin/callback"
-    scopes: list = ["r_liteprofile", "w_member_social"]
+    scopes: list = ["openid", "profile", "w_member_social", "email"]
     
     # Sales Navigator specific
     has_sales_navigator: bool = False
@@ -72,15 +72,19 @@ class LinkedInAPIClient:
         Generate OAuth authorization URL.
         User visits this to authorize the app.
         """
-        scopes = "%20".join(config.scopes)
-        return (
-            f"{self.AUTH_URL}/authorization?"
-            f"response_type=code&"
-            f"client_id={config.client_id}&"
-            f"redirect_uri={config.redirect_uri}&"
-            f"scope={scopes}&"
-            f"state={state}"
-        )
+        import urllib.parse
+        
+        effective_scopes = ["openid", "profile", "w_member_social", "email"]
+        
+        params = {
+            "response_type": "code",
+            "client_id": config.client_id,
+            "redirect_uri": config.redirect_uri,
+            "scope": " ".join(effective_scopes),
+            "state": state
+        }
+        
+        return f"{self.AUTH_URL}/authorization?{urllib.parse.urlencode(params)}"
     
     async def exchange_code_for_token(
         self, 
@@ -113,7 +117,25 @@ class LinkedInAPIClient:
     # -------------------------------------------------------------------------
     
     async def get_current_profile(self) -> Dict[str, Any]:
-        """Get the authenticated user's profile."""
+        """Get the authenticated user's profile using either OpenID userinfo or /me."""
+        # Try /userinfo first (OpenID Connect)
+        try:
+            response = await self.client.get(
+                "https://api.linkedin.com/v2/userinfo",
+                headers=self.headers
+            )
+            if response.status_code == 200:
+                data = response.json()
+                # Map OpenID fields to legacy format for compatibility
+                return {
+                    "localizedFirstName": data.get("given_name", ""),
+                    "localizedLastName": data.get("family_name", ""),
+                    "id": data.get("sub", "")
+                }
+        except:
+            pass
+
+        # Fallback to /me (Legacy)
         response = await self.client.get(
             f"{self.BASE_URL}/me",
             headers=self.headers
@@ -300,8 +322,8 @@ class LinkedInService:
 
 class MockLinkedInService(LinkedInService):
     """
-    Mock LinkedIn service for development/testing.
-    Simulates API responses without actual LinkedIn calls.
+    Mock LinkedIn service fallback when keys are missing.
+    Prevents false success responses so the user knows delivery failed.
     """
     
     async def send_outreach_message(
@@ -310,17 +332,15 @@ class MockLinkedInService(LinkedInService):
         message: str,
         message_type: str = "inmail"
     ) -> Dict[str, Any]:
-        """Mock sending a message."""
-        print(f"\n📧 MOCK LinkedIn Message")
+        """Fail message clearly if API keys are missing."""
+        print(f"\n📧 MOCK LinkedIn Message [BLOCKED]")
         print(f"To: {recipient_linkedin_url}")
-        print(f"Type: {message_type}")
-        print(f"Message: {message[:100]}...")
         
-        # Simulate success
+        # We explicitly fail here to solve the "shows successful but not sent" issue
         return {
-            "success": True,
-            "message_id": f"mock-msg-{uuid.uuid4().hex[:8]}",
-            "status": "sent",
+            "success": False,
+            "error": "LinkedIn API keys not configured. Please use 'Extension' method for outbound messaging.",
+            "status": "failed",
             "mock": True
         }
 
@@ -332,9 +352,11 @@ class MockLinkedInService(LinkedInService):
 def get_linkedin_service(access_token: Optional[str] = None) -> LinkedInService:
     """
     Get the appropriate LinkedIn service.
-    Returns mock in development, real in production.
+    Returns real service if keys are present, otherwise mock.
     """
-    if getattr(settings, 'DEV_MODE', True):
+    has_keys = bool(settings.LINKEDIN_CLIENT_ID and settings.LINKEDIN_CLIENT_SECRET)
+    
+    if getattr(settings, 'DEV_MODE', True) and not has_keys:
         return MockLinkedInService(access_token)
     else:
         return LinkedInService(access_token)

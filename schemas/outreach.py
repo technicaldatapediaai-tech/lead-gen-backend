@@ -107,3 +107,9 @@ class OutreachFilter(BaseModel):
     channel: Optional[str] = None
     status: Optional[str] = None
     template_id: Optional[uuid.UUID] = None
+
+
+class TemplateRenderRequest(BaseModel):
+    """Request body for rendering a template."""
+    lead_id: uuid.UUID
+    personalize: Optional[bool] = False

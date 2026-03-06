@@ -41,6 +41,19 @@ async def get_current_user(
     if not user.is_active:
         raise_unauthorized("User account is deactivated")
     
+    # Auto-select organization if user has memberships but no current org
+    if not user.current_org_id:
+        from backend.repositories.user_repo import OrganizationMemberRepository
+        from datetime import datetime
+        member_repo = OrganizationMemberRepository(session)
+        memberships = await member_repo.get_user_memberships(user.id)
+        if memberships:
+            user.current_org_id = memberships[0].org_id
+            user.updated_at = datetime.utcnow()
+            session.add(user)
+            await session.commit()
+            await session.refresh(user)
+    
     return user
 
 

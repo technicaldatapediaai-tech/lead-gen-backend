@@ -57,17 +57,6 @@ async def list_campaigns(
     return await campaign_service.list(current_user.current_org_id, status, page, limit)
 
 
-@router.get("/{campaign_id}", response_model=CampaignResponse)
-async def get_campaign(
-    campaign_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
-    session: AsyncSession = Depends(get_session)
-):
-    """Get a campaign by ID."""
-    campaign_service = CampaignService(session)
-    return await campaign_service.get(current_user.current_org_id, campaign_id)
-
-
 @router.patch("/{campaign_id}", response_model=CampaignResponse)
 async def update_campaign(
     campaign_id: uuid.UUID,
@@ -140,6 +129,7 @@ async def resume_campaign(
         campaign_id
     )
 
+
 @router.get("/overview-stats")
 async def get_overview_stats(
     current_user: User = Depends(get_current_user),
@@ -148,6 +138,17 @@ async def get_overview_stats(
     """Get aggregated stats for the campaigns dashboard."""
     campaign_service = CampaignService(session)
     return await campaign_service.get_dashboard_stats(current_user.current_org_id)
+
+
+@router.get("/{campaign_id}", response_model=CampaignResponse)
+async def get_campaign(
+    campaign_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session)
+):
+    """Get a campaign by ID."""
+    campaign_service = CampaignService(session)
+    return await campaign_service.get(current_user.current_org_id, campaign_id)
 
 
 @router.get("/{campaign_id}/stats")

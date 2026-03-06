@@ -167,11 +167,48 @@ class CampaignService:
         # Mock lead generation (replace with real extraction later)
         mock_leads = await self._generate_mock_leads(campaign)
         
+        # Template support
+        template_id = campaign.settings.get("template_id")
+        outreach_service = None
+        template = None
+        
+        if template_id:
+            from backend.services.outreach_service import OutreachService
+            outreach_service = OutreachService(self.session)
+            try:
+                template = await outreach_service.get_template(org_id, uuid.UUID(template_id))
+            except Exception:
+                template = None
+
         for lead_data in mock_leads:
             lead_data["org_id"] = org_id
             lead_data["campaign_id"] = campaign_id
             lead_data["source"] = campaign.type
-            await self.lead_repo.create(lead_data)
+            lead = await self.lead_repo.create(lead_data)
+            
+            # If template exists, create outreach message
+            if outreach_service and template:
+                from backend.schemas.outreach import OutreachCreate
+                
+                # Render template with lead data
+                try:
+                    rendered_content = await outreach_service.render_template(
+                        org_id, template.id, lead.id, 
+                        personalize=campaign.settings.get("personalize", False)
+                    )
+                    
+                    await outreach_service.create_message(
+                        org_id, user_id, OutreachCreate(
+                            lead_id=lead.id,
+                            channel=template.channel,
+                            subject=template.subject,
+                            message=rendered_content,
+                            template_id=template.id,
+                            send_method="api" if template.channel == "email" else "extension"
+                        )
+                    )
+                except Exception as e:
+                    print(f"⚠️ Failed to create outreach for lead {lead.id}: {e}")
         
         # Update campaign with results
         await self.campaign_repo.increment_leads_count(campaign_id, len(mock_leads))
@@ -283,6 +320,7 @@ class CampaignService:
             leads.append({
                 "name": f"{first} {last}",
                 "linkedin_url": f"https://linkedin.com/in/{first.lower()}-{last.lower()}-{uuid.uuid4().hex[:8]}",
+                "email": f"{first.lower()}.{last.lower()}@{company.lower().replace(' ', '')}.com",
                 "title": f"Senior {keyword} at {company}", # Make title contextual
                 "company": company,
                 "location": random.choice(locations),

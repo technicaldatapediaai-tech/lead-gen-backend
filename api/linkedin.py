@@ -42,6 +42,14 @@ class LinkedInConnectRequest(BaseModel):
     credential_type: str = "personal"  # personal or organization
 
 
+class ManualLinkedInConnectRequest(BaseModel):
+    """Connect LinkedIn using email and password credentials."""
+    linkedin_email: str  # LinkedIn account email
+    linkedin_password: str  # LinkedIn account password
+    profile_name: Optional[str] = None  # Display name (optional)
+    credential_type: str = "personal"  # personal or organization
+
+
 class SetPreferenceRequest(BaseModel):
     """Set LinkedIn credential preference."""
     use_personal: bool = True  # True = personal, False = org's shared
@@ -230,10 +238,13 @@ async def get_oauth_url(
     Args:
         credential_type: 'personal' or 'organization'
     """
+    redirect_uri = f"{getattr(settings, 'BACKEND_URL', 'http://localhost:8000')}/api/linkedin/callback"
+    print(f"🔗 LinkedIn OAuth initiated with redirect_uri: {redirect_uri}")
+    
     config = LinkedInConfig(
         client_id=getattr(settings, 'LINKEDIN_CLIENT_ID', ''),
         client_secret=getattr(settings, 'LINKEDIN_CLIENT_SECRET', ''),
-        redirect_uri=f"{getattr(settings, 'BACKEND_URL', 'http://localhost:8000')}/api/linkedin/callback"
+        redirect_uri=redirect_uri
     )
     
     if not config.client_id:
@@ -257,18 +268,31 @@ async def get_oauth_url(
 
 @router.get("/callback")
 async def oauth_callback(
-    code: str = Query(...),
-    state: str = Query(...),
+    code: Optional[str] = Query(None),
+    state: Optional[str] = Query(None),
+    error: Optional[str] = Query(None),
+    error_description: Optional[str] = Query(None),
     session: AsyncSession = Depends(get_session)
 ):
     """LinkedIn OAuth callback - stores credential in database."""
+    frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:3000')
+    
+    # Handle direct access or LinkedIn errors
+    if not code or not state:
+        err_msg = error_description or error or "Missing authorization code or state"
+        return RedirectResponse(
+            url=f"{frontend_url}/settings/linkedin?linkedin=error&message={err_msg}"
+        )
+
     # Parse state: user_id:type:random
     try:
         parts = state.split(":", 2)
         user_id = uuid.UUID(parts[0])
         credential_type = parts[1] if len(parts) > 1 else "personal"
     except:
-        raise HTTPException(status_code=400, detail="Invalid state parameter")
+        return RedirectResponse(
+            url=f"{frontend_url}/settings/linkedin?linkedin=error&message=Invalid state parameter"
+        )
     
     # Get user
     user = await session.get(User, user_id)
@@ -334,12 +358,12 @@ async def oauth_callback(
         # Redirect to frontend
         frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:3000')
         return RedirectResponse(
-            url=f"{frontend_url}/settings/integrations?linkedin=connected&type={credential_type}"
+            url=f"{frontend_url}/settings/linkedin?linkedin=connected&type={credential_type}"
         )
     except Exception as e:
         frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:3000')
         return RedirectResponse(
-            url=f"{frontend_url}/settings/integrations?linkedin=error&message={str(e)}"
+            url=f"{frontend_url}/settings/linkedin?linkedin=error&message={str(e)}"
         )
     finally:
         await client.close()
@@ -386,6 +410,62 @@ async def connect_linkedin(
     return {
         "message": f"LinkedIn {credential_type} credential connected successfully",
         "credential_type": credential_type
+    }
+
+
+@router.post("/connect-credentials")
+async def connect_linkedin_credentials(
+    request: ManualLinkedInConnectRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session)
+):
+    """
+    Connect LinkedIn using email and password.
+    Stores credentials securely for automation bot to use.
+    """
+    credential_type = request.credential_type
+    email = request.linkedin_email.strip()
+    password = request.linkedin_password.strip()
+    
+    if not email or not password:
+        raise HTTPException(status_code=400, detail="LinkedIn email and password are required")
+    
+    # Deactivate existing credentials of the same type
+    if credential_type == "personal":
+        query = select(LinkedInCredential).where(
+            LinkedInCredential.user_id == current_user.id,
+            LinkedInCredential.credential_type == "personal"
+        )
+    else:
+        query = select(LinkedInCredential).where(
+            LinkedInCredential.org_id == current_user.current_org_id,
+            LinkedInCredential.credential_type == "organization"
+        )
+    
+    result = await session.exec(query)
+    for old_cred in result.all():
+        old_cred.is_active = False
+        session.add(old_cred)
+    
+    # Store credentials — email as access_token, password as refresh_token
+    # In production, these should be encrypted at rest
+    credential = LinkedInCredential(
+        user_id=current_user.id if credential_type == "personal" else None,
+        org_id=current_user.current_org_id if credential_type == "organization" else None,
+        credential_type=credential_type,
+        access_token=email,
+        refresh_token=password,
+        linkedin_profile_name=request.profile_name or current_user.full_name,
+        linkedin_profile_url=None,
+        connected_by_user_id=current_user.id if credential_type == "organization" else None
+    )
+    session.add(credential)
+    await session.commit()
+    
+    return {
+        "message": f"LinkedIn {credential_type} account connected successfully",
+        "credential_type": credential_type,
+        "profile_name": credential.linkedin_profile_name
     }
 
 
@@ -558,7 +638,7 @@ async def send_batch_messages(
     """
     results = []
     
-    # 1. Extension Method (Queuing)
+    # 1. Extension Method (Queuing) - Does NOT require API token connected
     if request.send_method == "extension":
         for lead_id in request.lead_ids:
             lead = await session.get(Lead, lead_id)
@@ -578,6 +658,7 @@ async def send_batch_messages(
                 lead_id=lead.id,
                 channel="linkedin",
                 message=msg,
+                message_type=request.message_type,
                 send_method="extension",
                 status="pending", # Extension will pick this up
                 linkedin_profile_url=lead.linkedin_url
@@ -594,10 +675,13 @@ async def send_batch_messages(
             "message": "Messages queued for extension"
         }
 
-    # 2. API Method (Immediate Send)
+    # 2. API Method (Immediate Send) - DOES require API token
     token, source = await get_active_token(current_user, session)
     if not token:
-        raise HTTPException(status_code=400, detail="No LinkedIn connected")
+        raise HTTPException(
+            status_code=400, 
+            detail="To send via API, you must connect your LinkedIn account first. Use 'Extension' method for manual automation."
+        )
     
     service = get_linkedin_service(token)
     
@@ -627,7 +711,12 @@ async def send_batch_messages(
                 sent_at=datetime.utcnow() if result.get("success") else None
             )
             session.add(outreach_msg)
-            results.append({"lead_id": str(lead_id), "success": result.get("success", False)})
+            results.append({
+                "lead_id": str(lead_id), 
+                "success": result.get("success", False),
+                "status": result.get("status"),
+                "mock": result.get("mock", False)
+            })
         
         await session.commit()
     finally:

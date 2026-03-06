@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/lead_genius"
     
     # JWT Settings
-    SECRET_KEY: str = "supersecretkey"  # Change this in production!
+    SECRET_KEY: str = "supersecretkey"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
@@ -36,9 +36,13 @@ class Settings(BaseSettings):
     LINKEDIN_CLIENT_ID: str = ""
     LINKEDIN_CLIENT_SECRET: str = ""
 
+    # Google OAuth Settings
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+
     # Apify Settings
     APIFY_API_TOKEN: str = ""
-    APIFY_WEBHOOK_SECRET: str = ""
+    APIFY_WEBHOOK_SECRET: str = "webhook_secret"
     
     # OpenAI Settings (for AI-powered analysis)
     # Using OpenRouter for unified access to multiple AI models
@@ -54,8 +58,5 @@ class Settings(BaseSettings):
     
     class Config:
         env_file = ".env"
-        extra = "ignore"  # Allow extra fields in .env
 
 settings = Settings()
-
-

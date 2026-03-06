@@ -40,6 +40,7 @@ class QueuedMessage(BaseModel):
     lead_company: Optional[str]
     linkedin_url: str
     message: str
+    message_type: str  # inmail or connection
     channel: str
     template_name: Optional[str]
     created_at: str
@@ -64,6 +65,14 @@ class BatchStatusUpdate(BaseModel):
     message_id: str
     status: str
     error_message: Optional[str] = None
+
+class LeadSyncRequest(BaseModel):
+    """Data received from extension to sync a lead."""
+    name: str
+    url: str
+    headline: Optional[str] = None
+    company: Optional[str] = None
+    location: Optional[str] = None
 
 
 # =============================================================================
@@ -102,18 +111,41 @@ async def generate_extension_token(
 async def get_message_queue(
     limit: int = Query(default=20, le=100),
     channel: str = Query(default="linkedin"),
+    include_failed: bool = Query(default=False),
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session)
 ):
     """
     Get pending messages for the extension to send.
-    Returns messages with status 'queued' or 'pending' that are ready to send.
+    Returns messages with status 'queued', 'pending', or optionally 'failed' that are ready to send.
     """
+    # Build status filter
+    statuses = ["pending", "queued"]
+    if include_failed:
+        statuses.append("failed")
+    
+    # AUTO-RESET stuck messages
+    # If a message is 'sending' but hasn't been updated in 15 minutes, it's probably stuck
+    stuck_limit = datetime.utcnow() - timedelta(minutes=15)
+    stuck_query = select(OutreachMessage).where(
+        OutreachMessage.org_id == current_user.current_org_id,
+        OutreachMessage.status == "sending",
+        OutreachMessage.updated_at < stuck_limit
+    )
+    stuck_result = await session.exec(stuck_query)
+    stuck_messages = stuck_result.all()
+    for m in stuck_messages:
+        m.status = "pending"
+        m.error_message = "Auto-reset: Extension timed out while sending"
+        session.add(m)
+    if stuck_messages:
+        await session.commit()
+
     # Query messages that are queued for extension sending
     query = select(OutreachMessage).where(
         OutreachMessage.org_id == current_user.current_org_id,
         OutreachMessage.channel == channel,
-        OutreachMessage.status.in_(["pending", "queued"]),
+        OutreachMessage.status.in_(statuses),
         OutreachMessage.send_method == "extension"
     ).order_by(OutreachMessage.created_at.asc()).limit(limit)
     
@@ -126,20 +158,70 @@ async def get_message_queue(
         # Get lead info
         lead = await session.get(Lead, msg.lead_id)
         if lead:
+            url = lead.linkedin_url or msg.linkedin_profile_url or ""
+            if url and not url.startswith("http"):
+                if url.startswith("www."):
+                    url = f"https://{url}"
+                elif url.startswith("linkedin.com"):
+                    url = f"https://{url}"
+                else:
+                    url = f"https://www.linkedin.com/{url.lstrip('/')}"
+            
             queued_messages.append(QueuedMessage(
                 id=str(msg.id),
                 lead_name=lead.name,
                 lead_company=lead.company,
-                linkedin_url=lead.linkedin_url or msg.linkedin_profile_url or "",
+                linkedin_url=url,
                 message=msg.message,
+                message_type=getattr(msg, 'message_type', 'inmail') or 'inmail',
                 channel=msg.channel,
-                template_name=None,  # Could join with template
+                template_name=None,
                 created_at=msg.created_at.isoformat()
             ))
     
     return MessageQueueResponse(
         messages=queued_messages,
         count=len(queued_messages)
+    )
+
+
+@router.get("/history", response_model=MessageQueueResponse)
+async def get_message_history(
+    limit: int = Query(default=10, le=50),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session)
+):
+    """
+    Get history of sent or failed messages.
+    """
+    query = select(OutreachMessage).where(
+        OutreachMessage.org_id == current_user.current_org_id,
+        OutreachMessage.status.in_(["sent", "failed"]),
+        OutreachMessage.send_method == "extension"
+    ).order_by(OutreachMessage.updated_at.desc()).limit(limit)
+    
+    result = await session.exec(query)
+    messages = result.all()
+    
+    history_items = []
+    for msg in messages:
+        lead = await session.get(Lead, msg.lead_id)
+        if lead:
+            history_items.append(QueuedMessage(
+                id=str(msg.id),
+                lead_name=lead.name,
+                lead_company=lead.company,
+                linkedin_url=lead.linkedin_url or "",
+                message=msg.message,
+                message_type=getattr(msg, 'message_type', 'inmail') or 'inmail',
+                channel=msg.channel,
+                template_name=None,
+                created_at=msg.updated_at.isoformat()
+            ))
+    
+    return MessageQueueResponse(
+        messages=history_items,
+        count=len(history_items)
     )
 
 
@@ -266,9 +348,24 @@ async def get_extension_stats(
     """
     Get extension sending statistics.
     """
-    # Count messages by status for extension
     from sqlalchemy import func
     
+    # AUTO-RESET stuck messages before reporting stats
+    stuck_limit = datetime.utcnow() - timedelta(minutes=15)
+    stuck_query = select(OutreachMessage).where(
+        OutreachMessage.org_id == current_user.current_org_id,
+        OutreachMessage.status == "sending",
+        OutreachMessage.updated_at < stuck_limit
+    )
+    stuck_result = await session.exec(stuck_query)
+    stuck_messages = stuck_result.all()
+    for m in stuck_messages:
+        m.status = "pending"
+        session.add(m)
+    if stuck_messages:
+        await session.commit()
+
+    # Get total counts by status
     query = select(
         OutreachMessage.status,
         func.count(OutreachMessage.id)
@@ -280,11 +377,23 @@ async def get_extension_stats(
     result = await session.exec(query)
     stats = {row[0]: row[1] for row in result.all()}
     
+    # Get messages sent TODAY specifically
+    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    today_sent_query = select(func.count(OutreachMessage.id)).where(
+        OutreachMessage.org_id == current_user.current_org_id,
+        OutreachMessage.send_method == "extension",
+        OutreachMessage.status == "sent",
+        OutreachMessage.sent_at >= today_start
+    )
+    today_sent_result = await session.exec(today_sent_query)
+    sent_today = today_sent_result.one() or 0
+    
     return {
-        "queued": stats.get("queued", 0),
+        "queued": stats.get("queued", 0) + stats.get("pending", 0),
         "sending": stats.get("sending", 0),
-        "sent": stats.get("sent", 0),
+        "sent": sent_today,  # This maps to "Sent Today" in UI
         "failed": stats.get("failed", 0),
+        "total_sent": stats.get("sent", 0),
         "total": sum(stats.values())
     }
 
@@ -319,3 +428,54 @@ async def ingest_manual_post(
     except Exception as e:
         print(f"[MANUAL INGEST] Error: {str(e)}\n")
         return {"success": False, "error": str(e)}
+
+@router.post("/leads/sync")
+async def sync_lead_from_extension(
+    request: LeadSyncRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session)
+):
+    """
+    Sync a lead profile from LinkedIn directly to the CRM.
+    Checks for existing lead by URL before creating.
+    """
+    # Normalize URL
+    normalized_url = request.url.split('?')[0].replace('https://www.', 'https://').rstrip('/')
+    
+    # Check if lead exists
+    query = select(Lead).where(
+        Lead.org_id == current_user.current_org_id,
+        Lead.linkedin_url.contains(normalized_url)
+    )
+    result = await session.exec(query)
+    existing_lead = result.first()
+    
+    if existing_lead:
+        # Update existing
+        existing_lead.name = request.name
+        existing_lead.title = request.headline or existing_lead.title
+        existing_lead.company = request.company or existing_lead.company
+        existing_lead.updated_at = datetime.utcnow()
+        session.add(existing_lead)
+        await session.commit()
+        return {"success": True, "action": "updated", "id": str(existing_lead.id)}
+    
+    # Create new lead
+    new_lead = Lead(
+        id=uuid.uuid4(),
+        org_id=current_user.current_org_id,
+        name=request.name,
+        linkedin_url=request.url,
+        title=request.headline,
+        company=request.company,
+        location=request.location,
+        status="new",
+        source="extension",
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow()
+    )
+    
+    session.add(new_lead)
+    await session.commit()
+    
+    return {"success": True, "action": "created", "id": str(new_lead.id)}

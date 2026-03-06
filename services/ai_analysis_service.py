@@ -1,5 +1,9 @@
 from openai import OpenAI
 import google.generativeai as genai
+import warnings
+# Suppress the deprecation warning for google-generativeai as we transition
+warnings.filterwarnings("ignore", category=FutureWarning, module="google.generativeai")
+
 from backend.config import settings
 import logging
 import json

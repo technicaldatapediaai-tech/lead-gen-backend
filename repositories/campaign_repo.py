@@ -124,9 +124,9 @@ class CampaignRepository(BaseRepository[Campaign]):
             "avg_reply_rate": avg_reply_rate,
             "meetings_booked": int(replied * 0.3), # Estimate for now
             "total_leads": total_leads,
-            "channels": {
-                "linkedin": linkedin_count + linkedin_running,
-                "email": email_count + email_running,
-                "ai_call": call_count + call_running
-            }
+            "channels": [
+                {"name": "linkedin", "contacted": linkedin_count + linkedin_running, "replied": 0},
+                {"name": "email", "contacted": email_count + email_running, "replied": 0},
+                {"name": "ai_call", "contacted": call_count + call_running, "replied": 0}
+            ]
         }

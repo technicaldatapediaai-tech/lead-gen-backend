@@ -22,17 +22,24 @@ async def get_current_user_profile(
     session: AsyncSession = Depends(get_session)
 ):
     """Get current user profile with role in current organization."""
-    # Get role from OrganizationMember
+    # Get role from OrganizationMember and credits from Organization
     role = None
+    credits = 500
     if current_user.current_org_id:
-        query = select(OrganizationMember).where(
+        query_member = select(OrganizationMember).where(
             OrganizationMember.user_id == current_user.id,
             OrganizationMember.org_id == current_user.current_org_id
         )
-        result = await session.exec(query)
-        membership = result.first()
+        result_member = await session.exec(query_member)
+        membership = result_member.first()
         if membership:
             role = membership.role
+        
+        # Get organization credits
+        from backend.models.user import Organization
+        org = await session.get(Organization, current_user.current_org_id)
+        if org:
+            credits = org.credits
     
     return UserResponse(
         id=current_user.id,
@@ -42,6 +49,7 @@ async def get_current_user_profile(
         is_verified=current_user.is_verified,
         current_org_id=current_user.current_org_id,
         role=role,
+        credits=credits,
         created_at=current_user.created_at,
         last_login_at=current_user.last_login_at
     )
@@ -169,7 +177,8 @@ async def get_organization(
 ):
     """Get current user's organization."""
     user_service = UserService(session)
-    return await user_service.get_organization(current_user.current_org_id)
+    org = await user_service.get_organization(current_user.current_org_id)
+    return org
 
 
 @router.patch("/api/org/profile", response_model=OrganizationResponse)

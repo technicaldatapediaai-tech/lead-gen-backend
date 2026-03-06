@@ -30,6 +30,9 @@ class Organization(SQLModel, table=True):
     target_department: Optional[str] = None  # Department that buys the solution
     target_job_titles: Optional[str] = None  # Job titles to target
     
+    # Billing/Credits
+    credits: int = Field(default=500, index=True)
+    
     # Settings
     logo_url: Optional[str] = None
     timezone: str = Field(default="UTC")

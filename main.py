@@ -4,12 +4,13 @@ Main entry point with all routes configured.
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from datetime import datetime
 from contextlib import asynccontextmanager
 
 from backend.database import init_db
 
-# Import all API routers
-from backend.api import auth, users, leads, campaigns, outreach, personas, scoring, dashboard, organizations, extension, linkedin, apify, analysis, enrichment
+# Re-initializing backend with billing integration v2.4
+from backend.api import auth, users, leads, campaigns, outreach, personas, scoring, dashboard, organizations, extension, linkedin, apify, analysis, enrichment, billing, email
 
 # Import models to ensure they are registered with SQLModel
 from backend.models import (
@@ -19,7 +20,9 @@ from backend.models import (
     OutreachMessage, MessageTemplate,
     Persona, ScoringRule,
     ActivityLog, Webhook, WebhookDelivery,
-    LinkedInCredential, LinkedInPreference
+    LinkedInCredential, LinkedInPreference,
+    EmailAccount, EmailPreference,
+    Invoice, SubscriptionInfo
 )
 from backend.campaigns.run_models import CampaignRun
 from backend.models.lead import LeadInteraction
@@ -30,6 +33,12 @@ async def lifespan(app: FastAPI):
     """Startup and shutdown events."""
     # Startup
     await init_db()
+    
+    # Start background workers
+    import asyncio
+    from backend.services.background_tasks import email_automation_worker
+    asyncio.create_task(email_automation_worker())
+    
     yield
     # Shutdown
 
@@ -40,6 +49,19 @@ app = FastAPI(
     version="2.0.0",
     lifespan=lifespan
 )
+
+# Error logging middleware
+@app.middleware("http")
+async def log_errors(request, call_next):
+    try:
+        return await call_next(request)
+    except Exception as e:
+        import traceback
+        with open(r"c:\Users\Lenovo\Downloads\lead genius\lead genius\critical_errors.log", "a") as f:
+            f.write(f"\n--- ERROR at {datetime.now()} ---\n")
+            f.write(f"URL: {request.url}\n")
+            f.write(traceback.format_exc())
+        raise e
 
 # CORS Configuration
 app.add_middleware(
@@ -65,6 +87,8 @@ app.include_router(linkedin.router)   # LinkedIn API integration
 app.include_router(apify.router)      # Apify integration
 app.include_router(analysis.router)   # Post Analysis
 app.include_router(enrichment.router) # Apollo enrichment
+app.include_router(billing.router)
+app.include_router(email.router)
 
 
 @app.get("/")

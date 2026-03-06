@@ -10,7 +10,7 @@ from backend.database import get_session
 from backend.services.outreach_service import OutreachService
 from backend.schemas.outreach import (
     OutreachCreate, OutreachResponse,
-    TemplateCreate, TemplateUpdate, TemplateResponse
+    TemplateCreate, TemplateUpdate, TemplateResponse, TemplateRenderRequest
 )
 from backend.api.deps import get_current_user
 from backend.models.user import User
@@ -167,15 +167,16 @@ async def delete_template(
 @router.post("/templates/{template_id}/render")
 async def render_template(
     template_id: uuid.UUID,
-    lead_id: uuid.UUID,
+    data: TemplateRenderRequest,
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session)
 ):
-    """Render a template with lead data."""
+    """Render a template with lead data, optionally with AI personalization."""
     outreach_service = OutreachService(session)
     content = await outreach_service.render_template(
         current_user.current_org_id,
         template_id,
-        lead_id
+        data.lead_id,
+        personalize=data.personalize
     )
     return {"content": content}

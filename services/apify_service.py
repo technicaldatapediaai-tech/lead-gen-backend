@@ -1,3 +1,4 @@
+from typing import Optional
 from apify_client import ApifyClient
 from backend.config import settings
 import logging

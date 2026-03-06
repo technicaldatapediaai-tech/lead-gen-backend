@@ -19,6 +19,7 @@ class UserResponse(BaseModel):
     role: Optional[str] = None  # Role in current org, fetched from OrganizationMember
     created_at: datetime
     last_login_at: Optional[datetime] = None
+    credits: int = 500  # From organization
     
     class Config:
         from_attributes = True
@@ -41,6 +42,7 @@ class OrganizationResponse(BaseModel):
     stage: Optional[str] = None
     logo_url: Optional[str] = None
     timezone: str
+    credits: int = 500
     created_at: datetime
     
     class Config:
@@ -60,3 +62,4 @@ class OrganizationUpdate(BaseModel):
     target_job_titles: Optional[str] = None
     logo_url: Optional[str] = None
     timezone: Optional[str] = None
+    credits: Optional[int] = None
