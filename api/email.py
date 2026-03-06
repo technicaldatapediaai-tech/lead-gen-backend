@@ -132,11 +132,28 @@ async def get_google_auth_url(
 
 @router.get("/auth/google/callback")
 async def google_auth_callback(
-    code: str,
     state: str,
+    code: Optional[str] = None,
+    error: Optional[str] = None,
+    scope: Optional[str] = None,
+    authuser: Optional[str] = None,
+    prompt: Optional[str] = None,
     session: AsyncSession = Depends(get_session)
 ):
     """Handle Google OAuth callback."""
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"Google OAuth callback received - code present: {code is not None}, error: {error}, state length: {len(state) if state else 0}")
+    
+    # Handle OAuth errors (user denied, etc.)
+    if error:
+        logger.warning(f"Google OAuth error: {error}")
+        return RedirectResponse(url=f"{settings.FRONTEND_URL}/settings/email?error={error}")
+    
+    if not code:
+        logger.error("Google OAuth callback missing 'code' parameter")
+        return RedirectResponse(url=f"{settings.FRONTEND_URL}/settings/email?error=missing_code")
+    
     # 1. Parse state
     # Format: user_id:is_org_shared:random:verifier
     try:
@@ -146,54 +163,61 @@ async def google_auth_callback(
         is_org_shared = is_org_shared_str.lower() == "true"
         code_verifier = parts[3]
     except Exception:
-        raise HTTPException(status_code=400, detail="Invalid state")
+        logger.error(f"Invalid state format: {state[:50]}...")
+        return RedirectResponse(url=f"{settings.FRONTEND_URL}/settings/email?error=invalid_state")
         
     # 2. Exchange code for token
-    config = GoogleConfig(
-        client_id=settings.GOOGLE_CLIENT_ID,
-        client_secret=settings.GOOGLE_CLIENT_SECRET,
-        redirect_uri=f"{settings.BACKEND_URL}/api/email/auth/google/callback"
-    )
-    
-    client = GoogleAPIClient()
-    token_resp = client.fetch_token(config, code, code_verifier)
-    
-    # 3. Get user info
-    email, name = client.get_user_info(token_resp)
-    
-    # 4. Save account
-    user = await session.get(User, uuid.UUID(user_id))
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-        
-    # Check if account already exists
-    from sqlmodel import select
-    query = select(EmailAccount).where(
-        EmailAccount.email == email,
-        EmailAccount.org_id == user.current_org_id
-    )
-    result = await session.exec(query)
-    existing = result.first()
-    
-    if existing:
-        account = existing
-    else:
-        account = EmailAccount(
-            email=email,
-            org_id=user.current_org_id,
-            user_id=user.id if not is_org_shared else None,
-            provider="google",
-            is_org_shared=is_org_shared
+    try:
+        config = GoogleConfig(
+            client_id=settings.GOOGLE_CLIENT_ID,
+            client_secret=settings.GOOGLE_CLIENT_SECRET,
+            redirect_uri=f"{settings.BACKEND_URL}/api/email/auth/google/callback"
         )
         
-    account.sender_name = name
-    account.access_token = token_resp['access_token']
-    account.refresh_token = token_resp.get('refresh_token')
-    account.token_expires_at = token_resp.get('expires_at')
-    
-    session.add(account)
-    await session.commit()
-    
-    # Redirect to frontend settings
-    return RedirectResponse(url=f"{settings.FRONTEND_URL}/settings/email?connected=google")
+        client = GoogleAPIClient()
+        token_resp = client.fetch_token(config, code, code_verifier)
+        
+        # 3. Get user info
+        email, name = client.get_user_info(token_resp)
+        logger.info(f"Google OAuth successful for email: {email}")
+        
+        # 4. Save account
+        user = await session.get(User, uuid.UUID(user_id))
+        if not user:
+            return RedirectResponse(url=f"{settings.FRONTEND_URL}/settings/email?error=user_not_found")
+            
+        # Check if account already exists
+        from sqlmodel import select
+        query = select(EmailAccount).where(
+            EmailAccount.email == email,
+            EmailAccount.org_id == user.current_org_id
+        )
+        result = await session.exec(query)
+        existing = result.first()
+        
+        if existing:
+            account = existing
+        else:
+            account = EmailAccount(
+                email=email,
+                org_id=user.current_org_id,
+                user_id=user.id if not is_org_shared else None,
+                provider="google",
+                is_org_shared=is_org_shared
+            )
+            
+        account.sender_name = name
+        account.access_token = token_resp['access_token']
+        account.refresh_token = token_resp.get('refresh_token')
+        account.token_expires_at = token_resp.get('expires_at')
+        
+        session.add(account)
+        await session.commit()
+        
+        # Redirect to frontend settings
+        return RedirectResponse(url=f"{settings.FRONTEND_URL}/settings/email?connected=google")
+        
+    except Exception as e:
+        logger.error(f"Google OAuth token exchange failed: {str(e)}")
+        return RedirectResponse(url=f"{settings.FRONTEND_URL}/settings/email?error=token_exchange_failed")
 
